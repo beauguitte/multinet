@@ -1,0 +1,209 @@
+---
+title: "Analyse de graphes multiplexes avec multinet"
+author: "Paul Gourdon & Laurent Beauguitte"
+date: "29/03/2021"
+output: html_document
+---
+
+Les données utilisées sont issues de l'article d'Estelle Vallier paru dans la revue  *ARCS* (Vallier, 2018). - à décrire
+
+```{r setup, include=FALSE}
+setwd("~/multinet")
+rm(list=ls())
+options(digits = 3)
+```
+
+## Création d'un objet multinet
+
+La manière la plus simple pour créer un graphe mu<ltiplexe est de créer les différents graphes avec igraph, de créer un objet multilayer network vide puis d'ajouter un à un les objets igraph. Seul problème : les attributs éventuels des sommets et/ou des liens ne sont pas pris en compte lors de l'importation.
+
+
+```{r multi, message=FALSE}
+#install.packages('multinet')
+library(igraph)
+library(multinet)
+
+#import des données
+node <- read.table("202103multinet/2018_vallier_data_nodelist.csv", header=T, sep=",")
+link <- read.table("202103multinet/2018_vallier_data_edgelist.csv", header=T, sep=",",
+                   encoding = "UTF-8")
+
+#création des 3 objets igraph correspondant à 3 types de liens
+coll <- graph_from_data_frame(link[link$Type_fr == "Collaboration",], node, 
+                              directed = FALSE) 
+cons <- graph_from_data_frame(link[link$Type_fr == "Consortium",], node, 
+                              directed = FALSE) 
+depa <- graph_from_data_frame(link[link$Type_fr == "Dépannage",], node, 
+                              directed = TRUE) 
+
+#création d'un multilayer network vide
+net <- ml_empty()
+
+#ajout des couches igraph
+add_igraph_layer_ml(net, coll, "coll") 
+add_igraph_layer_ml(net, cons, "cons")
+add_igraph_layer_ml(net, depa, "depa")
+net
+```
+
+La fonction summary(net) permet d'obtenir des informations concernant les différentes couches du graphe multiplexe, la couche nommée _flat_ correspond à l'aggrégation des différentes couches. 
+
+* n : nombre de sommets non isolés (degré <=1) ; 
+* m : nombre de liens (taille)
+* dir : la couche correspond à un graphe orienté (1) ou non (0)
+* nc : nombre de composantes connexes, les sommets isolés ne sont pas pris en compte
+* slc : ?
+* dens : densité
+* cc: transitivité globale (orientation non prise en compte pour les couches orientées)
+* apl : average path length
+* dia : diamètre
+
+```{r}
+summary(net)
+
+#contrôle pour vérifier propriétés de la couche _flat_ (pas possible car mélangze orienté et non orienté) et l'import de l'intensité des liens - ne se fait pas
+#à supprimer 
+#link2 <- link[link$Type_fr == "Collaboration" | link$Type_fr == "Consortium" | link$Type_fr == "Dépannage",]
+#link2$weigth <- 1
+#gflat <- graph_from_data_frame(link2[,c(1,2,6)], node, directed=FALSE)
+#gflat <- simplify(gflat, remove.multiple = TRUE, edge.attr.comb = "sum")
+#add_igraph_layer_ml(net, gflat, "gflat")
+#net
+
+
+```
+
+
+## Mesurer
+
+```{r}
+#mesures
+degree_ml(net) #- flat-
+
+#mesure pour deux 2 couches slm
+degree_ml(net, c(1:42), c("cons", "coll"), "all")
+
+#résumé couche par couche
+layer_summary_ml(net, layer = "coll", method="entropy.degree", mode = "all")
+
+
+#comparer les couches
+#mêmes sommets dans les différentes couches (0 à 1)
+layer_comparison_ml(net, method="jaccard.actors")
+
+
+#même degré dans différentes couches - qq soit les voisins
+layer_comparison_ml(net,method="pearson.degree")
+
+#comparaison distribution degré
+layer_comparison_ml(net,method="jeffrey.degree")
+
+#comparaison distribution degré (divergence)
+layer_comparison_ml(net,method="dissimilarity.degree")
+
+#nb edges communs divisé par somme des liens
+layer_comparison_ml(net, layers = c("coll", "depa"))
+
+#mêmes liens entre mêmes paires de sommets
+layer_comparison_ml(net, method="jaccard.edges")
+
+
+```
+
+## Visualiser
+
+You can also embed plots, for example:
+
+```{r}
+#choix visualisation - layout_circular_ml
+l <- layout_multiforce_ml(net)  #par défaut
+plot(net, layout = l, vertex.labels = NA)
+
+#représenter une seule couche
+plot(net, layout = l, layers = "coll", 
+     vertex.color = "blue",
+     vertex.labels = NA)
+
+#et pour représenter le _flat_ ?
+```
+
+## Détection de communautés
+
+```{r}
+#détection communauté - 4 algo implémentés
+#clique percolation, ABACUS, Infomap
+com1 <- glouvain_ml(net)
+com2 <- clique_percolation_ml(net)
+#com3 <- abacus_ml(net, min.actors = 3, min.layers = 3) #error
+com4 <- infomap_ml(net)
+
+#crée dataframe : sommet, couche, communauté
+head(com1, 4) 
+
+#nb communautés et taille selon lalgo choisi
+table(com1$cid)
+table(com2$cid) 
+table(com4$cid)
+
+#indicateurs
+modularity_ml(net, com1, gamma = 1, omega = 1)
+
+#comparaison entre deux partitions 1 - 4
+nmi_ml(net, com1, com4)
+omega_index_ml(net, com1, com4)
+
+#group all nodes having same comm id and same layer
+#get_community_list_ml(com1, net)
+
+#visu 
+plot(net, vertex.labels.cex=.5, com=com4)
+```
+
+
+## Questions non encore résolues
+
+importation des attributs
+
+tester avec une couche valuée cf si import de l'intensité des liens
+
+
+
+```{r}
+#importer attribut des sommets
+# type <- node$TYPE
+# add_attributes_ml(net,target="actor",type="numeric", 
+#                   attributes="type")
+
+#couleurs
+pal <- brewer.pal(n = 9, name = "Paired")
+        
+#création attributs 
+# degree <- degree_ml(net, actors_ml(net), layers_ml(net), mode="all") 
+# add_attributes_ml(net,target="actor",type="numeric",
+#                   attributes="degree")
+# 
+# plot(net, layout = l, 
+#      vertex.labels = type,
+#      vertex.cex = log(deg), #n'est juste que sur le flat graph
+#      vertex.color = pal)    #tout est faux ici ;)
+
+#possibilité d'analyser le flat graph dans igraph
+layers <- as.list(net)
+names(layers)
+plot.igraph(layers[[1]], vertex.labels = NA,
+     vertex.size = degree(layers[[1]]),
+     edge.arrow.size = 0)
+
+```
+
+
+
+## Références
+
+Dickison, Mark E., Matteo Magnani et Luca Rossi. *Multilayer social networks*. Cambridge University Press, 2016.
+
+Magnani, Matteo, Luca Rossi et Davide Vega. [Analysis of Multiplex Social Networks with R](http://multilayer.it.uu.se/jss.pdf). *Journal of Statistical Software*.
+
+[Documentation du package](https://cran.r-project.org/web/packages/multinet/multinet.pdf)
+
+Vallier, Estelle. [Voyage en cluster](https://hal.archives-ouvertes.fr/hal-01743633/document). *ARCS-Analyse de réseaux pour les sciences sociales* (2018). 
